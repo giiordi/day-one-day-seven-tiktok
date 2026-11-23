@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neon Dodger — Day 1 vs Day 7</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #0b0b1e; height: 100%; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { width: min(100vw, 56.25vh); height: min(100vh, 177.78vw); display: block; }
+</style>
+</head>
+<body>
+<canvas id="game" width="1080" height="1920"></canvas>
+<script type="module">
+import { createGame, step, autopilot, snapshot, WORLD } from "./game.js";
+
+const params = new URLSearchParams(location.search);
+const day = params.get("day") === "7" ? 7 : 1;
+const demo = params.get("demo") === "1";
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const g = createGame(day);
+const keys = {};
+let pointer = null;
+
+addEventListener("keydown", (e) => { keys[e.key.toLowerCase()] = true; });
+addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
+canvas.addEventListener("pointermove", (e) => {
+  const r = canvas.getBoundingClientRect();
+  pointer = { x: (e.clientX - r.left) / r.width * WORLD.w, y: (e.clientY - r.top) / r.height * WORLD.h };
+});
+canvas.addEventListener("pointerdown", (e) => {
+  const r = canvas.getBoundingClientRect();
+  pointer = { x: (e.clientX - r.left) / r.width * WORLD.w, y: (e.clientY - r.top) / r.height * WORLD.h };
+});
+
+function readInput() {
+  if (demo) return autopilot(g);
+  if (pointer) {
+    return {
+      left: pointer.x < g.ship.x - 14,
+      right: pointer.x > g.ship.x + 14,
+      up: pointer.y < g.ship.y - 14,
+      down: pointer.y > g.ship.y + 14,
+    };
+  }
+  return {
+    left: keys.arrowleft || keys.a,
+    right: keys.arrowright || keys.d,
+    up: keys.arrowup || keys.w,
+    down: keys.arrowdown || keys.s,
+  };
+}
+
+function draw(s) {
+  // Deep-space backdrop.
+  ctx.fillStyle = "#0b0b1e";
+  ctx.fillRect(0, 0, WORLD.w, WORLD.h);
+  for (const n of s.nebula) {
+    const grad = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, n.r);
+    grad.addColorStop(0, `hsla(${n.hue}, 80%, 55%, 0.20)`);
+    grad.addColorStop(1, "hsla(265, 80%, 55%, 0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (const st of s.stars) {
+    const a = 0.35 + 0.65 * Math.abs(Math.sin(s.t * 2 + st.tw));
+    ctx.fillStyle = `rgba(255,255,255,${a.toFixed(2)})`;
+    ctx.beginPath();
+    ctx.arc(st.x, st.y, st.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (g.cfg.speedLines) {
+    ctx.strokeStyle = "rgba(120,220,255,0.25)";
+    ctx.lineWidth = 3;
+    for (let i = 0; i < 12; i++) {
+      const x = ((i * 173 + s.t * 900) % 1080);
+      const y = ((i * 311) % 1920);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x, y + 90);
+      ctx.stroke();
+    }
+  }
+  // Power-ups.
+  for (const p of s.powerups) {
+    const pulse = 1 + 0.15 * Math.sin(p.pulse);
+    ctx.fillStyle = p.kind === "star" ? "#ffd166" : "#37e6ff";
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * pulse, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#191419";
+    ctx.font = "bold 26px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(p.kind === "star" ? "+" : "S", p.x, p.y + 1);
+  }
+  // Asteroids.
+  for (const a of s.asteroids) {
+    ctx.save();
+    ctx.translate(a.x, a.y);
+    ctx.rotate(a.rot);
+    ctx.fillStyle = a.kind === "spiky" ? "#8a5cff" : "#5b5470";
+    ctx.beginPath();
+    const spikes = a.kind === "spiky" ? 9 : 7;
+    for (let i = 0; i <= spikes * 2; i++) {
+      const ang = (i / (spikes * 2)) * Math.PI * 2;
+      const rr = a.r * (i % 2 === 0 ? 1 : 0.72);
+      ctx[i === 0 ? "moveTo" : "lineTo"](Math.cos(ang) * rr, Math.sin(ang) * rr);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.beginPath();
+    ctx.arc(-a.r * 0.25, -a.r * 0.3, a.r * 0.35, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  // Particles.
+  for (const p of s.particles) {
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  // Ship: a neon dart.
+  const sh = s.ship;
+  ctx.save();
+  ctx.translate(sh.x, sh.y);
+  if (sh.shield) {
+    ctx.strokeStyle = "rgba(55,230,255,0.85)";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.arc(0, 0, 52, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.fillStyle = "#37e6ff";
+  ctx.beginPath();
+  ctx.moveTo(0, -38);
+  ctx.lineTo(26, 26);
+  ctx.lineTo(0, 12);
+  ctx.lineTo(-26, 26);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#ff5d8f";
+  ctx.beginPath();
+  ctx.arc(0, -6, 9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  // HUD.
+  ctx.fillStyle = "rgba(11,11,30,0.55)";
+  ctx.fillRect(0, 0, WORLD.w, 150);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 64px sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(g.cfg.label, 48, 96);
+  ctx.textAlign = "right";
+  ctx.fillText(String(s.score), WORLD.w - 48, 96);
+  ctx.font = "bold 34px sans-serif";
+  ctx.fillStyle = "#ffd166";
+  if (g.cfg.combo) ctx.fillText("COMBO x" + s.combo.toFixed(1), WORLD.w - 48, 140);
+  if (s.over) {
+    ctx.fillStyle = "rgba(11,11,30,0.72)";
+    ctx.fillRect(0, 0, WORLD.w, WORLD.h);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 96px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("GAME OVER", WORLD.w / 2, WORLD.h / 2 - 20);
+    ctx.font = "bold 48px sans-serif";
+    ctx.fillText("Score " + s.score + "  ·  Dodged " + s.dodged, WORLD.w / 2, WORLD.h / 2 + 60);
+    ctx.font = "44px sans-serif";
+    ctx.fillStyle = "#37e6ff";
+    ctx.fillText("Press R to fly again", WORLD.w / 2, WORLD.h / 2 + 140);
+  }
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  step(g, readInput(), dt);
+  draw(snapshot(g));
+  if (g.over && (keys.r || keys.enter)) location.reload();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
